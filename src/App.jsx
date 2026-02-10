@@ -1,158 +1,143 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  changeDirection,
-  createInitialState,
-  step,
-  DIRECTIONS,
-} from "./game.js";
+import { useEffect, useRef } from "react";
+import "./App.css";
+import porscheUrl from "./assets/porsche.png";
 
-const GRID_SIZE = 20;
-const TICK_MS = 140;
-
+const CANVAS_WIDTH = 360;
+const CANVAS_HEIGHT = 220;
 export default function App() {
-  const rngRef = useRef(() => Math.random());
-  const initial = useMemo(
-    () => createInitialState(GRID_SIZE, GRID_SIZE, rngRef.current),
-    []
-  );
-  const [game, setGame] = useState(initial);
+  const canvasRef = useRef(null);
 
   useEffect(() => {
-    if (game.gameOver) return undefined;
-    const id = setInterval(() => {
-      setGame((prev) => step(prev, rngRef.current));
-    }, TICK_MS);
-    return () => clearInterval(id);
-  }, [game.gameOver]);
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
 
-  useEffect(() => {
-    function handleKey(event) {
-      const key = event.key.toLowerCase();
-      const next =
-        key === "arrowup" || key === "w"
-          ? "up"
-          : key === "arrowdown" || key === "s"
-            ? "down"
-            : key === "arrowleft" || key === "a"
-              ? "left"
-              : key === "arrowright" || key === "d"
-                ? "right"
-                : null;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
 
-      if (!next) return;
-      event.preventDefault();
-      setGame((prev) => changeDirection(prev, next));
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = CANVAS_WIDTH * dpr;
+    canvas.height = CANVAS_HEIGHT * dpr;
+    canvas.style.width = `${CANVAS_WIDTH}px`;
+    canvas.style.height = `${CANVAS_HEIGHT}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+
+    const img = new Image();
+    img.src = porscheUrl;
+
+    let animationId = 0;
+
+    function removeBackground(image) {
+      const off = document.createElement("canvas");
+      off.width = image.width;
+      off.height = image.height;
+      const offCtx = off.getContext("2d");
+      if (!offCtx) return null;
+
+      offCtx.drawImage(image, 0, 0);
+      const imageData = offCtx.getImageData(0, 0, off.width, off.height);
+      const data = imageData.data;
+      const key = [data[0], data[1], data[2]];
+      const threshold = 50;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        if (
+          Math.abs(r - key[0]) < threshold &&
+          Math.abs(g - key[1]) < threshold &&
+          Math.abs(b - key[2]) < threshold
+        ) {
+          data[i + 3] = 0;
+        }
+      }
+
+      offCtx.putImageData(imageData, 0, 0);
+      return off;
     }
 
-    window.addEventListener("keydown", handleKey, { passive: false });
-    return () => window.removeEventListener("keydown", handleKey);
+    img.onload = () => {
+      const cleaned = removeBackground(img);
+      if (!cleaned) return;
+
+      const scale = Math.min(
+        (CANVAS_WIDTH - 24) / cleaned.width,
+        (CANVAS_HEIGHT - 40) / cleaned.height
+      );
+      const spriteWidth = cleaned.width * scale;
+      const spriteHeight = cleaned.height * scale;
+      const minX = 8;
+      const maxX = CANVAS_WIDTH - spriteWidth - 8;
+      let x = minX;
+      let vx = 0.6;
+      let lastTime = 0;
+
+      function frame(time) {
+        const delta = time - lastTime;
+        lastTime = time;
+
+        x += vx * delta * 0.08;
+        if (x <= minX) {
+          x = minX;
+          vx = Math.abs(vx);
+        } else if (x >= maxX) {
+          x = maxX;
+          vx = -Math.abs(vx);
+        }
+
+        const bob = Math.sin(time / 320) * 2;
+
+        const yBase = (CANVAS_HEIGHT - spriteHeight) / 2 + 10;
+
+        ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+        ctx.beginPath();
+        ctx.ellipse(
+          x + spriteWidth / 2,
+          yBase + spriteHeight * 0.8,
+          spriteWidth * 0.45,
+          6,
+          0,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+
+        ctx.save();
+        if (vx < 0) {
+          ctx.translate(x + spriteWidth, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(
+            cleaned,
+            0,
+            yBase + bob,
+            spriteWidth,
+            spriteHeight
+          );
+        } else {
+          ctx.drawImage(
+            cleaned,
+            x,
+            yBase + bob,
+            spriteWidth,
+            spriteHeight
+          );
+        }
+        ctx.restore();
+
+        animationId = requestAnimationFrame(frame);
+      }
+
+      animationId = requestAnimationFrame(frame);
+    };
+
+    return () => cancelAnimationFrame(animationId);
   }, []);
 
-  const snakeSet = useMemo(() => {
-    const set = new Set();
-    game.snake.forEach((segment) => set.add(`${segment.x},${segment.y}`));
-    return set;
-  }, [game.snake]);
-
-  const cells = [];
-  for (let y = 0; y < GRID_SIZE; y += 1) {
-    for (let x = 0; x < GRID_SIZE; x += 1) {
-      const key = `${x},${y}`;
-      const isHead = game.snake[0].x === x && game.snake[0].y === y;
-      const isSnake = snakeSet.has(key);
-      const isFood = game.food.x === x && game.food.y === y;
-      const className = isFood
-        ? "cell food"
-        : isHead
-          ? "cell head"
-          : isSnake
-            ? "cell snake"
-            : "cell";
-      cells.push(<div key={key} className={className} />);
-    }
-  }
-
-  function restart() {
-    setGame(createInitialState(GRID_SIZE, GRID_SIZE, rngRef.current));
-  }
-
   return (
-    <div className="page">
-      <header className="top">
-        <div>
-          <h1>Snake</h1>
-          <p className="hint">Use arrow keys or WASD. Eat food to grow.</p>
-        </div>
-        <div className="score">
-          <div className="score-label">Score</div>
-          <div className="score-value">{game.score}</div>
-        </div>
-      </header>
-
-      <main className="board-wrap">
-        <div
-          className={`board ${game.gameOver ? "board-over" : ""}`}
-          style={{
-            gridTemplateColumns: `repeat(${GRID_SIZE}, 1fr)`,
-            gridTemplateRows: `repeat(${GRID_SIZE}, 1fr)`,
-          }}
-        >
-          {cells}
-        </div>
-        {game.gameOver && (
-          <div className="overlay">
-            <div className="overlay-card">
-              <div className="overlay-title">Game Over</div>
-              <div className="overlay-sub">Final score: {game.score}</div>
-              <button className="primary" onClick={restart}>
-                Restart
-              </button>
-            </div>
-          </div>
-        )}
-      </main>
-
-      <section className="controls">
-        <button
-          className="control"
-          onClick={() => setGame((prev) => changeDirection(prev, "up"))}
-          aria-label="Up"
-        >
-          ↑
-        </button>
-        <div className="controls-row">
-          <button
-            className="control"
-            onClick={() => setGame((prev) => changeDirection(prev, "left"))}
-            aria-label="Left"
-          >
-            ←
-          </button>
-          <button className="control" onClick={restart}>
-            Restart
-          </button>
-          <button
-            className="control"
-            onClick={() => setGame((prev) => changeDirection(prev, "right"))}
-            aria-label="Right"
-          >
-            →
-          </button>
-        </div>
-        <button
-          className="control"
-          onClick={() => setGame((prev) => changeDirection(prev, "down"))}
-          aria-label="Down"
-        >
-          ↓
-        </button>
-      </section>
-
-      <footer className="footer">
-        <button className="ghost" onClick={restart}>
-          Restart Game
-        </button>
-      </footer>
+    <div className="scene">
+      <canvas ref={canvasRef} aria-label="Pixel Porsche" />
     </div>
   );
 }
